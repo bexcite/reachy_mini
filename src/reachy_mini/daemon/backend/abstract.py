@@ -189,9 +189,14 @@ class Backend:
         """Run the backend in a try-except block to store errors."""
         try:
             self.run()
-        except Exception as e:
+        except BaseException as e:
             self.error = str(e)
-            self.close()
+            try:
+                self.close()
+            except BaseException as close_error:
+                # Don't let close() errors (including Rust panics) prevent propagation
+                import logging
+                logging.getLogger(__name__).error(f"Error during close(): {close_error}")
             raise e
 
     def run(self) -> None:

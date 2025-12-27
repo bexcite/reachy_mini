@@ -220,11 +220,12 @@ class Daemon:
 
             try:
                 self.backend.wrapped_run()
-            except Exception as e:
+            except BaseException as e:
                 self.logger.error(f"Backend encountered an error: {e}")
-                self._status.state = DaemonState.ERROR
-                self._status.error = str(e)
-                self.zenoh_server.stop()
+                self.logger.error("Backend crashed, exiting process for restart...")
+                # Exit immediately before cleanup (which might also fail/hang)
+                import os
+                os._exit(1)
                 if self.websocket_server is not None:
                     self.websocket_server.stop()
                 if (
@@ -252,6 +253,11 @@ class Daemon:
                 ):
                     self.websocket_audio_sender.stop_flag = True
                 self.backend = None
+
+                # Exit the process so systemd can restart it
+                self.logger.error("Backend crashed, exiting process for restart...")
+                import os
+                os._exit(1)
 
         self.backend_run_thread = Thread(target=backend_wrapped_run)
         self.backend_run_thread.start()
