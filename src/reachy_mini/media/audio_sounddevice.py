@@ -38,7 +38,7 @@ class SoundDeviceAudio(AudioBase):
         self._input_queued_samples: int = 0
 
         self._output_device_id = self._get_device_id(
-            ["Reachy Mini Audio", "respeaker"], device_io_type="output"
+            ["default"], device_io_type="output"
         )
         self._input_device_id = self._get_device_id(
             ["Reachy Mini Audio", "respeaker"], device_io_type="input"
@@ -142,9 +142,9 @@ class SoundDeviceAudio(AudioBase):
 
     def get_output_channels(self) -> int:
         """Get the number of output channels of the audio device."""
-        return int(
-            sd.query_devices(self._output_device_id, "output")["max_output_channels"]
-        )
+        # Force stereo output regardless of device capability
+        # This avoids issues with PulseAudio reporting 32 channels
+        return 2
 
     def stop_recording(self) -> None:
         """Close the audio stream and release resources."""
@@ -178,6 +178,7 @@ class SoundDeviceAudio(AudioBase):
         self._output_stream = sd.OutputStream(
             samplerate=self.get_output_audio_samplerate(),
             device=self._output_device_id,
+            channels=2,  # Force stereo to avoid PulseAudio's 32-channel default
             callback=self._output_callback,
         )
         if self._output_stream is None:
