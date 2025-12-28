@@ -1,15 +1,14 @@
-
 # Reachy Mini Lite + Pi 5 Setup Summary (auto start of daemon + convo app)
 
-IMPORTANT NOTE: Claude Code was heavily used for everything, so something maybe not optimal or
-maybe not even correct, though it works fine on my setup.
+IMPORTANT NOTE: Claude Code was heavily used for everything, so some things may not be optimal or
+even correct, though it works fine on my setup.
 
-# Motivation
+## Motivation
 
-Make Raspberry Pi 5 as a Reachy Mini Lite computer that runs the reachy-mini-daemon reachy-conversation-app
-that auto starts (and restarts) realiably on power ON and powercycle of robot and off a pi host. (i.e. kids level reliability)
+Set up Raspberry Pi 5 as a Reachy Mini Lite computer that runs reachy-mini-daemon and reachy-conversation-app
+with reliable auto-start (and restart) on power ON, power cycle of robot, and Pi reboot. (i.e. kid-level reliability)
 
-# Harwdware
+## Hardware
 
 - Reachy Mini Lite + Official Power Supply
 - Pi 5, 8Gb + 64Gb SD Card + Official Power Supply
@@ -18,11 +17,11 @@ that auto starts (and restarts) realiably on power ON and powercycle of robot an
 
 ## Initial Pi 5 Software + WiFi/SSH Setup
 
-This part is not described in detail (ask your LLM of choice to get through) with this:
+This part is not described in detail (ask your LLM of choice to help):
 
 - Raspberry Pi OS Lite https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2025-12-04/2025-12-04-raspios-trixie-armhf-lite.img.xz
 - Flash pi 5 image + enable wifi + enable ssh + add user `reachy` + set hostname `reachy-brain`
-- Ensure that you can connect over ssh to wifi connected pi, (and check that on pi powercycle the WiFi is UP and you can ssh to it again. e.g. `ssh reachy@reachy-brain.local`)
+- Ensure that you can connect over SSH to the WiFi-connected Pi (and verify that after a power cycle, WiFi comes up and you can SSH again, e.g. `ssh reachy@reachy-brain.local`)
 
 ## Get reachy-mini repo and dependencies
 
@@ -34,23 +33,23 @@ mkdir ~/code
 Then follow installation steps from source code: https://github.com/bexcite/reachy_mini/blob/develop/docs/SDK/installation.md
 
 Result:
-- code pulled to `~/code/reachy_mini`
-- `uv` created environment in `~/code/reachy_mini/.venv` (for some reason `uv` want's to use this location if one runs `uv {sync,run}` commands from the repo dir `~/code/reachy_mini`).
+- Code pulled to `~/code/reachy_mini`
+- `uv` creates the environment in `~/code/reachy_mini/.venv` (this is the default location when running `uv sync` or `uv run` commands from the repo directory).
 
-NOTE: Some system level deps may require (list below is not exhaustive):
+NOTE: Some system-level dependencies may be required (list is not exhaustive):
 ```
 sudo apt update
 sudo apt install git git-lfs libcairo2-dev pulseaudio
 ```
 
-## Trying to run `uv run reachy-mini-daemon` and clear all issues
+## Trying to run `uv run reachy-mini-daemon` and fixing issues
 
-Assuming the `~/code/reachy_mini` repo pulled, and `uv` env in `~/code/reachy_mini/.venv`.
+Assuming the `~/code/reachy_mini` repo is pulled and the `uv` environment is in `~/code/reachy_mini/.venv`.
 
-If we try to run `cd ~/code/reachy_mini && uv run reachy-mini-daemon` there are a bunch of
-errors that we will try to fix.
+If you try to run `cd ~/code/reachy_mini && uv run reachy-mini-daemon`, there will be several
+errors to fix.
 
-I'm leaving this in the form that Claude Code formatted it and not as a one off results.
+I'm leaving this in the format that Claude Code produced.
 
 ### 1. Audio Device Access
 - Problem: Error querying device -1 - daemon couldn't access audio
@@ -62,13 +61,31 @@ I'm leaving this in the form that Claude Code formatted it and not as a one off 
 - Cause: User reachy not in video group
 - Fix: `sudo usermod -aG video reachy`
 
-On Pi (/etc/systemd/system/):
+### 3. Audio Sharing Between Daemon & Apps (systemd service)
+- Problem: ValueError: Not an output device: 'default' when running as systemd service
+- Cause: Service couldn't access PulseAudio (no user session)
+- Fix: Added `Environment="XDG_RUNTIME_DIR=/run/user/1000"` to `reachy-mini-daemon.service` file
+
+### 4. Daemon Not Exiting on Power Cycle
+- Problem: When Reachy Mini power is turned off, daemon got stuck instead of restarting
+- Cause: Rust panic in `close()` bypassed Python exception handler (`pyo3_runtime.PanicException` is `BaseException`, not `Exception`)
+- Fix: Changed `except Exception` to `except BaseException` in both:
+  - `src/reachy_mini/daemon/daemon.py` - added `os._exit(1)` on backend crash
+  - `src/reachy_mini/daemon/backend/abstract.py` - wrapped `close()` in `try/except`
+
+At this point, install and run `reachy_mini_conversation_app`:
+- Ensure that `reachy-mini-daemon` is running, then open `http://reachy-brain.local:8000/` and install `reachy_mini_conversation_app` from the "Install from 🤗 Hugging Face" section.
+- Toggle `reachy_mini_conversation_app` to ON state and continue (if voice output is not working, proceed to issue #5)
+
+## Files to Create on Pi
+
+### /etc/systemd/system/reachy-mini-daemon.service
 ```
-# /etc/systemd/system/reachy-mini-daemon.service
 [Unit]
 Description=Reachy Mini Daemon
 After=network.target pulseaudio.service
-BindsTo=dev-ttyACM0.device
+# Wait for USB serial device to be available
+Wants=dev-ttyACM0.device
 After=dev-ttyACM0.device
 
 [Service]
@@ -77,11 +94,16 @@ User=reachy
 Group=reachy
 WorkingDirectory=/home/reachy/code/reachy_mini
 Environment="PATH=/home/reachy/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# PulseAudio access for audio sharing between daemon and apps
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
 ExecStart=/home/reachy/.local/bin/uv run reachy-mini-daemon
 Restart=always
 RestartSec=5
+
+# Give it time to gracefully shutdown
 TimeoutStopSec=30
+
+# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=reachy-mini-daemon
@@ -90,25 +112,8 @@ SyslogIdentifier=reachy-mini-daemon
 WantedBy=multi-user.target
 ```
 
-### 3. Audio Sharing Between Daemon & Apps
-- Problem: ValueError: Not an output device: 'default' when running as systemd service
-- Cause: Service couldn't access PulseAudio (no user session)
-- Fix: Added `Environment="XDG_RUNTIME_DIR=/run/user/1000"` to `reachy-mini-daemon.service` file
-
-### 4. Daemon Not Exiting on Power Cycle
-- Problem: When Reachy Mini power turned off, daemon got stuck instead of restarting
-- Cause: Rust panic in `close()` bypassed Python exception handler; `pyo3_runtime.PanicException is BaseException not Exception`
-- Fix: Changed except Exception to except BaseException in both:
-- src/reachy_mini/daemon/daemon.py - added `os._exit(1)` on backend crash
-- src/reachy_mini/daemon/backend/abstract.py - wrapped `close()` in `try/except`
-
-At this point we install and run `reachy_mini_conversation_app`:
-- Ensure that `reachy-mini-daemon` is running, then open `http://reachy-brain.local:8000/` and install `reachy_mini_conversation_app` from "Install from 🤗 Hugging Face" section.
-- toggle `reachy_mini_conversation_app` to ON state and continue (if you have voice output not working, which is happening from time to time)
-
-On Pi (`/etc/systemd/system/`):
+### /etc/systemd/system/reachy-conversation-app.service
 ```
-# /etc/systemd/system/reachy-conversation-app.service
 [Unit]
 Description=Start Reachy Mini Conversation App
 After=reachy-mini-daemon.service
@@ -125,18 +130,14 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 ```
 
-### 5. Audio Sharing Between Daemon & Conversation App
+### /home/reachy/.asoundrc
+
+This fixes issue #5 (Audio Sharing Between Daemon & Conversation App):
 - Problem: Conversation app audio not playing - daemon held ALSA device directly, blocking other processes
 - Cause: PortAudio compiled without PulseAudio backend (only ALSA/OSS available)
 - Diagnosis: `fuser -v /dev/snd/*` showed daemon holding pcmC3D0p directly; PulseAudio sink was SUSPENDED
-- Fix:
-- Created ~/.asoundrc to set PulseAudio as default ALSA device
-- Changed audio_sounddevice.py to use "default" device for output
-- Force stereo output (channels=2) since PulseAudio reports 32 max channels
 
-On Pi (`/home/reachy/`):
 ```
-# /home/reachy/.asoundrc
 # Configure dmix for Reachy Mini Audio to allow sharing
 pcm.reachy_dmix {
     type dmix
@@ -169,8 +170,18 @@ ctl.!default {
 }
 ```
 
-On Pi (create file `/home/reachy/start-conversation-app.sh`):
+After creating the service files, enable them:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable reachy-mini-daemon.service
+sudo systemctl enable reachy-conversation-app.service
 ```
+
+### /home/reachy/start-conversation-app.sh
+
+Create this file and make it executable with `chmod +x /home/reachy/start-conversation-app.sh`:
+
+```bash
 #!/bin/bash
 MAX_ATTEMPTS=30
 ATTEMPT=0
@@ -210,8 +221,9 @@ echo "Timeout waiting for daemon"
 exit 1
 ```
 
----
-Code Changes (in reachy_mini repo), collected in this branch [here](https://github.com/bexcite/reachy_mini/tree/pb/pi-setup)
+## Code Changes
+
+Changes to the reachy_mini repo, collected in this branch: [pb/pi-setup](https://github.com/bexcite/reachy_mini/tree/pb/pi-setup)
 ```
 src/reachy_mini/daemon/daemon.py - Exit process on backend crash:
 except BaseException as e:
@@ -254,7 +266,16 @@ def get_output_channels(self) -> int:
     return 2
 ```
 
-## Useful Commands (on Pi)
+## Useful Commands
+
+For convenience, add this to your local `~/.ssh/config`:
+```
+Host reachy-brain
+    HostName reachy-brain.local
+    User reachy
+```
+
+Then you can use `ssh reachy-brain` instead of `ssh reachy@reachy-brain.local`.
 
 For debugging:
 
