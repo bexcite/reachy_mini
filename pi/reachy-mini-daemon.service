@@ -1,0 +1,29 @@
+[Unit]
+Description=Reachy Mini Daemon
+After=network.target pulseaudio.service
+# Wait for USB serial device to be available
+Wants=dev-ttyACM0.device
+After=dev-ttyACM0.device
+
+[Service]
+Type=simple
+User=reachy
+Group=reachy
+WorkingDirectory=/home/reachy/code/reachy_mini
+Environment="PATH=/home/reachy/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# PulseAudio access for audio sharing between daemon and apps
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+ExecStart=/home/reachy/.local/bin/uv run reachy-mini-daemon
+Restart=always
+RestartSec=5
+
+# Give it time to gracefully shutdown
+TimeoutStopSec=30
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=reachy-mini-daemon
+
+[Install]
+WantedBy=multi-user.target
