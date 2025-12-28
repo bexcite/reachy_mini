@@ -1,6 +1,6 @@
 # Reachy Mini Lite + Pi 5 Setup Summary (auto start of daemon + convo app)
 
-IMPORTANT NOTE: Claude Code was heavily used for everything, so some things may not be optimal or
+**IMPORTANT NOTE**: Claude Code was heavily used for everything, so some things may not be optimal or
 even correct, though it works fine on my setup.
 
 ## Motivation
