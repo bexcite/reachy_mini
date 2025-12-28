@@ -19,7 +19,7 @@ with reliable auto-start (and restart) on power ON, power cycle of robot, and Pi
 
 This part is not described in detail (ask your LLM of choice to help):
 
-- Raspberry Pi OS Lite https://downloads.raspberrypi.com/raspios_lite_armhf/images/raspios_lite_armhf-2025-12-04/2025-12-04-raspios-trixie-armhf-lite.img.xz
+- Raspberry Pi OS Lite [Download](https://www.raspberrypi.com/software/operating-systems/)
 - Flash pi 5 image + enable wifi + enable ssh + add user `reachy` + set hostname `reachy-brain`
 - Ensure that you can connect over SSH to the WiFi-connected Pi (and verify that after a power cycle, WiFi comes up and you can SSH again, e.g. `ssh reachy@reachy-brain.local`)
 
@@ -30,10 +30,10 @@ On Pi 5 we assume that we have a folder:
 mkdir ~/code
 ```
 
-Then follow installation steps from source code: https://github.com/bexcite/reachy_mini/blob/develop/docs/SDK/installation.md
+Then follow official installation steps from source code: https://github.com/pollen-robotics/reachy_mini/blob/develop/docs/SDK/installation.md
 
-Result:
-- Code pulled to `~/code/reachy_mini`
+Expected Result:
+- Code pulled to `~/code/reachy_mini` (I used branch `origin/develop`)
 - `uv` creates the environment in `~/code/reachy_mini/.venv` (this is the default location when running `uv sync` or `uv run` commands from the repo directory).
 
 NOTE: Some system-level dependencies may be required (list is not exhaustive):
