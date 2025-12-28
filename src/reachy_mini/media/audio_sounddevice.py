@@ -37,9 +37,9 @@ class SoundDeviceAudio(AudioBase):
         self._input_max_queue_seconds: float = MAX_INPUT_QUEUE_SECONDS
         self._input_queued_samples: int = 0
 
-        self._output_device_id = self._get_device_id(
-            ["default"], device_io_type="output"
-        )
+        # Use None to let sounddevice pick the system default output device
+        # This avoids race conditions with PulseAudio during startup
+        self._output_device_id: int | None = None
         self._input_device_id = self._get_device_id(
             ["Reachy Mini Audio", "respeaker"], device_io_type="input"
         )
@@ -129,9 +129,7 @@ class SoundDeviceAudio(AudioBase):
 
     def get_output_audio_samplerate(self) -> int:
         """Get the output samplerate of the audio device."""
-        return int(
-            sd.query_devices(self._output_device_id, "output")["default_samplerate"]
-        )
+        return int(sd.query_devices(self._output_device_id, "output")["default_samplerate"])
 
     def get_input_channels(self) -> int:
         """Get the number of input channels of the audio device."""

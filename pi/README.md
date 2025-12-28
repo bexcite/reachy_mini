@@ -125,6 +125,8 @@ User=reachy
 Group=reachy
 ExecStart=/home/reachy/start-conversation-app.sh
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
@@ -168,6 +170,21 @@ ctl.!default {
     type hw
     card 3
 }
+```
+
+### ~/.config/pulse/default.pa
+
+Ensures PulseAudio loads the Reachy Mini Audio device on startup (prevents null sink fallback):
+
+```
+# Include the default PulseAudio config
+.include /etc/pulse/default.pa
+
+# Load Reachy Mini Audio device explicitly
+.ifexists module-alsa-sink.so
+load-module module-alsa-sink device=hw:Audio rate=48000 sink_name=reachy_audio sink_properties=device.description=Reachy_Mini_Audio
+set-default-sink reachy_audio
+.endif
 ```
 
 After creating the service files, enable them:
@@ -246,11 +263,11 @@ except BaseException as e:
 ```
 
 ```
-src/reachy_mini/media/audio_sounddevice.py - Use default device & force stereo:
+src/reachy_mini/media/audio_sounddevice.py - Use system default device & force stereo:
 # In __init__:
-self._output_device_id = self._get_device_id(
-    ["default"], device_io_type="output"
-)
+# Use None to let sounddevice pick the system default output device
+# This avoids race conditions with PulseAudio during startup
+self._output_device_id: int | None = None
 
 # In start_playing():
 self._output_stream = sd.OutputStream(

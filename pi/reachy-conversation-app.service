@@ -9,6 +9,8 @@ User=reachy
 Group=reachy
 ExecStart=/home/reachy/start-conversation-app.sh
 RemainAfterExit=yes
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
