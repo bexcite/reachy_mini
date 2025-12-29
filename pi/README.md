@@ -139,13 +139,16 @@ This fixes issue #5 (Audio Sharing Between Daemon & Conversation App):
 - Cause: PortAudio compiled without PulseAudio backend (only ALSA/OSS available)
 - Diagnosis: `fuser -v /dev/snd/*` showed daemon holding pcmC3D0p directly; PulseAudio sink was SUSPENDED
 
+**IMPORTANT**: Use card name `Audio` instead of card number (e.g., `hw:3,0`) because USB card numbers can change between reboots depending on enumeration order.
+
 ```
-# Configure dmix for Reachy Mini Audio to allow sharing
+# Configure Reachy Mini Audio to use dmix for sharing
+# Use card name 'Audio' instead of number for stability across reboots
 pcm.reachy_dmix {
     type dmix
     ipc_key 1024
     slave {
-        pcm "hw:3,0"
+        pcm "hw:Audio,0"
         rate 48000
         channels 2
     }
@@ -155,12 +158,13 @@ pcm.reachy_dsnoop {
     type dsnoop
     ipc_key 1025
     slave {
-        pcm "hw:3,0"
+        pcm "hw:Audio,0"
         rate 16000
         channels 6
     }
 }
 
+# Set as default
 pcm.!default {
     type plug
     slave.pcm "reachy_dmix"
@@ -168,7 +172,7 @@ pcm.!default {
 
 ctl.!default {
     type hw
-    card 3
+    card Audio
 }
 ```
 
