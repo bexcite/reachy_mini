@@ -537,6 +537,13 @@ class Daemon:
             self._status.state = DaemonState.ERROR
             self._status.error = str(e)
             self.logger.error(f"Failed to start daemon: {e}")
+            if not sim and not mockup_sim:
+                # E.g. robot power off ("No motors detected"): exit so systemd
+                # retries until the robot is powered on again.
+                self.logger.error(
+                    "Robot backend failed to start, exiting process for restart..."
+                )
+                os._exit(1)
 
         return self._status.state
 
