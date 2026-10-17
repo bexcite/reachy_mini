@@ -444,9 +444,14 @@ class Backend:
         """Run the backend in a try-except block to store errors."""
         try:
             self.run()
-        except Exception as e:
+        # BaseException: Rust panics (pyo3 PanicException) are not Exceptions.
+        except BaseException as e:
             self.error = str(e)
-            self.close()
+            try:
+                self.close()
+            except BaseException as close_error:
+                # close() can panic too, don't let it mask the original error.
+                self.logger.error(f"Error during close(): {close_error}")
             raise e
 
     def run(self) -> None:

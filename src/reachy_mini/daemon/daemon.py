@@ -8,6 +8,7 @@ It also provides a command-line interface for easy interaction.
 import asyncio
 import json
 import logging
+import os
 import time
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
@@ -461,13 +462,13 @@ class Daemon:
 
                 try:
                     self.backend.wrapped_run()
-                except Exception as e:
+                # BaseException: Rust panics (pyo3 PanicException) are not Exceptions.
+                except BaseException as e:
                     self.logger.error(f"Backend encountered an error: {e}")
-                    self._status.state = DaemonState.ERROR
-                    self._status.error = str(e)
-                    if self.ws_server is not None:
-                        self.ws_server.stop()
-                    self.backend = None
+                    # Exit right away (cleanup may hang on a dead serial port)
+                    # so systemd restarts the daemon, e.g. after a power cycle.
+                    self.logger.error("Backend crashed, exiting process for restart...")
+                    os._exit(1)
 
             self.backend_run_thread = Thread(target=backend_wrapped_run)
             self.backend_run_thread.start()
