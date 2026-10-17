@@ -1,6 +1,9 @@
 [Unit]
 Description=Reachy Mini Daemon
-After=network.target pulseaudio.service
+After=network.target
+# User PulseAudio (needs `loginctl enable-linger reachy`) must be up before media starts
+Wants=user@1000.service
+After=user@1000.service
 # Wait for USB serial device to be available
 Wants=dev-ttyACM0.device
 After=dev-ttyACM0.device
@@ -9,16 +12,24 @@ After=dev-ttyACM0.device
 Type=simple
 User=reachy
 Group=reachy
-WorkingDirectory=/home/reachy/code/reachy_mini
+WorkingDirectory=/home/reachy/code/reachy_mini_v112
 Environment="PATH=/home/reachy/.local/bin:/usr/local/bin:/usr/bin:/bin"
-# PulseAudio access for audio sharing between daemon and apps
+# PulseAudio (user instance) access: daemon audio goes through pulsesink/pulsesrc
 Environment="XDG_RUNTIME_DIR=/run/user/1000"
-ExecStart=/home/reachy/.local/bin/uv run reachy-mini-daemon
+# webrtcsink, built from gst-plugins-rs (not packaged by Debian)
+Environment="GST_PLUGIN_PATH=/opt/gst-plugins-rs/lib/aarch64-linux-gnu/gstreamer-1.0"
+# Run the venv entry point directly: `uv run` would re-sync the venv to uv.lock
+# and could revert packages installed by apps (they share this venv).
+# Camera and audio enumerate later than ttyACM0 at boot; media is detected once at startup.
+ExecStartPre=/home/reachy/code/reachy_mini_v112/pi/wait-for-reachy-media.sh
+ExecStart=/home/reachy/code/reachy_mini_v112/.venv/bin/reachy-mini-daemon
 Restart=always
 RestartSec=5
 
 # Give it time to gracefully shutdown
 TimeoutStopSec=30
+# Covers the media wait in ExecStartPre (max 120s)
+TimeoutStartSec=180
 
 # Logging
 StandardOutput=journal
