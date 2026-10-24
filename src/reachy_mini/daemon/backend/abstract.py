@@ -357,7 +357,10 @@ class Backend:
         self._tracking_requested_weight = 1.0
         self._tracking_weight = 0.0
         self._tracking_alpha = 0.15
-        self._tracking_lost_timeout = 2.0
+        # pb: after losing the face, keep looking where it was, then drift back to neutral slowly (~6 s at
+        # 50 Hz): at 2 s and alpha 0.15 the head snapped to the front 0.3 s after a child stepped away.
+        self._tracking_lost_timeout = 5.0
+        self._tracking_recenter_alpha = 0.008
         self._tracking_aim: Annotated[NDArray[np.float64], (4, 4)] | None = None
         self._tracking_target_pose: Annotated[NDArray[np.float64], (4, 4)] | None = None
         self._last_face_seen: float | None = None
@@ -749,17 +752,19 @@ class Backend:
                     )
                     if obs.center is not None:
                         self._last_face_seen = now
-            if (
+            lost = (
                 self._last_face_seen is not None
                 and now - self._last_face_seen >= self._tracking_lost_timeout
-            ):
+            )
+            if lost:
                 self._tracking_target_pose = self.INIT_HEAD_POSE.copy()
             if self._tracking_target_pose is None:
                 return
             if self._tracking_aim is None:
                 self._tracking_aim = self.get_current_head_pose()
+            alpha = self._tracking_recenter_alpha if lost else self._tracking_alpha
             self._tracking_aim = linear_pose_interpolation(
-                self._tracking_aim, self._tracking_target_pose, self._tracking_alpha
+                self._tracking_aim, self._tracking_target_pose, alpha
             )
             self.ik_required = True
 
