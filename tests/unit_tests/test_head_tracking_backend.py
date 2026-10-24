@@ -232,6 +232,26 @@ def test_tracking_sustained_loss_recenters_to_neutral() -> None:
     np.testing.assert_allclose(backend._tracking_target_pose, np.eye(4), atol=1e-9)
 
 
+def test_tracking_loss_holds_the_aim_then_recenters_slowly() -> None:
+    """pb: the head keeps looking where the face was, then drifts to neutral instead of snapping."""
+    backend = _make_backend()
+    backend._tracking_enabled = True
+    target = np.eye(4, dtype=np.float64)
+    target[:3, :3] = R.from_euler("z", 0.5).as_matrix()
+    backend._tracking_target_pose = target
+    backend._tracking_aim = target.copy()
+
+    backend._last_face_seen = time.monotonic() - (backend._tracking_lost_timeout - 1.0)
+    backend.step_head_tracking()
+    np.testing.assert_allclose(backend._tracking_aim, target, atol=1e-9)  # held
+
+    backend._last_face_seen = time.monotonic() - (backend._tracking_lost_timeout + 1.0)
+    backend.step_head_tracking()
+    angle = np.linalg.norm(R.from_matrix(backend._tracking_aim[:3, :3]).as_rotvec())
+    # one slow step toward neutral
+    assert 0.5 * (1 - 2 * backend._tracking_recenter_alpha) < angle < 0.5
+
+
 def test_enable_head_tracking_weight_zero_pauses_without_stopping() -> None:
     """Weight 0 pauses the tracker and frees the head without stopping it."""
     backend = _make_backend()
