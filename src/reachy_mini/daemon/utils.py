@@ -20,6 +20,8 @@ class SimulationMode(Enum):
 
 # Path to the unix socket created by WebRTC daemon for local camera access (Linux/macOS)
 CAMERA_SOCKET_PATH = "/tmp/reachymini_camera_socket"
+# The optional recording feed (pb): smaller frames at a higher rate (startup_app_config.get_record_feed).
+CAMERA_RECORD_SOCKET_PATH = "/tmp/reachymini_camera_record_socket"
 
 # Named pipe for local camera access on Windows.
 # GStreamer's win32ipcvideosink / win32ipcvideosrc expect the full

@@ -19,6 +19,7 @@ _EQ_KEY = "speaker_eq_gains"
 _TURN_KEY = "turn_enabled"
 _FIRST_WAKE_UP_KEY = "first_wake_up_completed"
 _TELEMETRY_KEY = "telemetry_enabled"
+_RECORD_FEED_KEY = "record_feed"
 # equalizer-10bands accepts per-band gains in [-24, +12] dB.
 _EQ_GAIN_MIN, _EQ_GAIN_MAX = -24.0, 12.0
 
@@ -119,6 +120,32 @@ def get_turn_enabled() -> bool | None:
     robot that is only ever reached from its own network.
     """
     return _get_bool(_TURN_KEY)
+
+
+def get_record_feed() -> tuple[int, int, int] | None:
+    """Return (fps, width, height) of the camera recording feed, or None when off (pb).
+
+    ``"record_feed": {"fps": 60, "width": 640, "height": 360}`` in daemon_config.json adds a second local camera
+    feed (CAMERA_RECORD_SOCKET_PATH): the same frames, smaller and up to ``fps`` a second, for apps that record
+    them (the main feed is capped at IPC_FPS and full size). Malformed values are warned about and ignored.
+    """
+    value = _read().get(_RECORD_FEED_KEY)
+    if value is None:
+        return None
+    try:
+        fps, width, height = (int(value[k]) for k in ("fps", "width", "height"))
+        if not (1 <= fps <= 60 and 16 <= width <= 1920 and 16 <= height <= 1080):
+            raise ValueError("out of range")
+        if width % 2 or height % 2:
+            raise ValueError("width and height must be even")
+    except (TypeError, KeyError, ValueError) as e:
+        logger.warning(
+            'Ignoring invalid \'%s\' in daemon config (%s); need {"fps": 1-60, "width", "height"}.',
+            _RECORD_FEED_KEY,
+            e,
+        )
+        return None
+    return fps, width, height
 
 
 def _update(key: str, value: object | None) -> None:

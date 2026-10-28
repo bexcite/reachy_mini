@@ -36,8 +36,10 @@ from typing import Any, Callable, Dict, Optional
 import gi
 import numpy as np
 
+from reachy_mini.daemon import startup_app_config
 from reachy_mini.daemon.utils import (
     CAMERA_PIPE_NAME,
+    CAMERA_RECORD_SOCKET_PATH,
     CAMERA_SOCKET_PATH,
     SimulationMode,
     is_local_camera_available,
@@ -988,6 +990,11 @@ class GstMediaServer:
         # IPC branch: share camera with local applications
         self._build_ipc_branch(tee, pipeline, is_rpi=is_rpi)
 
+        # Recording branch (pb): off unless daemon_config.json asks for it.
+        record = startup_app_config.get_record_feed()
+        if record is not None and not is_rpi and platform.system() != "Windows":
+            self._build_record_branch(tee, pipeline, *record)
+
         # WebRTC branch
         queue_webrtc = Gst.ElementFactory.make("queue", "queue_webrtc")
         pipeline.add(queue_webrtc)
@@ -1258,6 +1265,75 @@ class GstMediaServer:
             identity.link(videoconvert_ipc)
             videoconvert_ipc.link(capsfilter_ipc)
             capsfilter_ipc.link(ipc_sink)
+
+    def _build_record_branch(
+        self,
+        tee: Gst.Element,
+        pipeline: Gst.Pipeline,
+        fps: int,
+        width: int,
+        height: int,
+    ) -> None:
+        """Add a second local feed for apps that record frames (pb): ``width`` x ``height`` BGR, up to ``fps``.
+
+        The main IPC feed is full size and capped at IPC_FPS (it paces every client, the face tracker
+        included); recording for training wants more frames, not more pixels. The frames are already decoded
+        (the camera's MJPEG at its full rate), so this branch only scales and converts. Its queue is leaky: a
+        slow or absent reader drops frames here and never holds up the tee (the WebRTC and IPC branches).
+        Linux and macOS only (unixfdsink); the same identity + videoconvert as the IPC branch so unixfdsink
+        gets FD-backed buffers.
+        """
+        queue = Gst.ElementFactory.make("queue", "queue_record")
+        queue.set_property("leaky", 2)  # downstream: drop the oldest
+        queue.set_property("max-size-buffers", 2)
+        videorate = Gst.ElementFactory.make("videorate", "record_videorate")
+        videorate.set_property("drop-only", True)
+        videorate.set_property("max-rate", fps)
+        videoscale = Gst.ElementFactory.make("videoscale", "record_videoscale")
+        caps_small = Gst.ElementFactory.make("capsfilter", "record_scale_caps")
+        caps_small.set_property(
+            "caps",
+            Gst.Caps.from_string(
+                f"video/x-raw,format=I420,width={width},height={height}"
+            ),
+        )
+        identity = Gst.ElementFactory.make("identity", "record_identity")
+        identity.set_property("drop-allocation", True)
+        videoconvert = Gst.ElementFactory.make("videoconvert", "record_videoconvert")
+        caps_bgr = Gst.ElementFactory.make("capsfilter", "record_capsfilter")
+        caps_bgr.set_property(
+            "caps",
+            Gst.Caps.from_string(
+                f"video/x-raw,format=BGR,width={width},height={height}"
+            ),
+        )
+        sink = Gst.ElementFactory.make("unixfdsink", "record_sink")
+        elements = [
+            queue,
+            videorate,
+            videoscale,
+            caps_small,
+            identity,
+            videoconvert,
+            caps_bgr,
+            sink,
+        ]
+        if not all(elements):
+            self._logger.warning(
+                "Recording feed not available: missing GStreamer elements."
+            )
+            return
+        if os.path.exists(CAMERA_RECORD_SOCKET_PATH):
+            os.remove(CAMERA_RECORD_SOCKET_PATH)
+        sink.set_property("socket-path", CAMERA_RECORD_SOCKET_PATH)
+        for elem in elements:
+            pipeline.add(elem)
+        tee.link(queue)
+        for a, b in zip(elements, elements[1:]):
+            a.link(b)
+        self._logger.info(
+            f"Recording feed: {width}x{height} up to {fps} fps at {CAMERA_RECORD_SOCKET_PATH}"
+        )
 
     @staticmethod
     def _webrtcsink_handles_rpi_encoder() -> bool:
