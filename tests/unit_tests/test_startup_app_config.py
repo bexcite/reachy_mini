@@ -114,3 +114,26 @@ def test_get_bool_none_and_warns_on_malformed(
     with caplog.at_level("WARNING"):
         assert startup_app_config._get_bool("some_flag") is None
     assert "some_flag" in caplog.text
+
+
+# ─── record_feed (pb) ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (None, None),
+        ({"fps": 60, "width": 640, "height": 360}, (60, 640, 360)),
+        ({"fps": "30", "width": 320, "height": 180}, (30, 320, 180)),
+        ({"fps": 0, "width": 640, "height": 360}, None),
+        ({"fps": 61, "width": 640, "height": 360}, None),
+        ({"fps": 30, "width": 641, "height": 360}, None),
+        ({"fps": 30, "width": 640}, None),
+        ("60", None),
+    ],
+)
+def test_record_feed(config_path: Path, value, expected):
+    """The recording feed's (fps, width, height), or None when unset or malformed."""
+    if value is not None:
+        startup_app_config._update("record_feed", value)
+    assert startup_app_config.get_record_feed() == expected
