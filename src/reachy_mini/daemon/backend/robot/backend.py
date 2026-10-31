@@ -29,8 +29,35 @@ from reachy_mini.utils.hardware_config.parser import parse_yaml_config
 from ..abstract import Backend
 
 
+def dynamixel_reboot_packet(motor_id: int) -> bytes:
+    """Build a Dynamixel Protocol 2.0 REBOOT instruction (0x08) for one motor.
+
+    https://emanual.robotis.com/docs/en/dxl/protocol2/#reboot-0x08
+    """
+    packet = bytes([0xFF, 0xFF, 0xFD, 0x00, motor_id, 0x03, 0x00, 0x08])
+    crc = 0  # CRC-16, polynomial 0x8005, over header to instruction
+    for byte in packet:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x8005) if crc & 0x8000 else crc << 1
+            crc &= 0xFFFF
+    return packet + crc.to_bytes(2, "little")
+
+
 class RobotBackend(Backend):
     """Real robot backend for Reachy Mini."""
+
+    # A motor that reports Overload turns its torque off and keeps the error until it
+    # is rebooted, which the controller does only at start: an antenna caught for a
+    # moment (a decoration, a hand) stayed limp until the next daemon start. These
+    # motors are rebooted once the error has lasted OVERLOAD_RECOVER_AFTER_S, at most
+    # OVERLOAD_RECOVER_MAX_PER_HOUR times an hour each, so a blocked one is not forced.
+    OVERLOAD_RECOVER_MOTORS = ("right_antenna", "left_antenna")
+    OVERLOAD_RECOVER_AFTER_S = 10.0
+    OVERLOAD_RECOVER_MAX_PER_HOUR = 3
+    # The control loop stops after 1 s without positions; a rebooting motor misses the
+    # bus reads for a moment.
+    MOTOR_REBOOT_GRACE_S = 3.0
 
     def __init__(
         self,
@@ -79,6 +106,8 @@ class RobotBackend(Backend):
         )
 
         self.name2id = self.c.get_motor_name_id()
+        # The gains live in the motors' RAM: a reboot resets them (_finish_motor_reboot).
+        self._motor_pids: dict[str, tuple[int, int, int]] = {}
         if hardware_config_filepath is not None:
             config = parse_yaml_config(hardware_config_filepath)
             for motor_name, motor_conf in config.motors.items():
@@ -89,6 +118,13 @@ class RobotBackend(Backend):
                         f"Setting PID gains for motor '{motor_name}' (ID: {motor_id}): P={p}, I={i}, D={d}"
                     )
                     self.c.async_write_pid_gains(motor_id, p, i, d)
+                    self._motor_pids[motor_name] = (p, i, d)
+
+        self._overload_since: dict[str, float] = {}
+        self._overload_reboots: dict[str, list[float]] = {}
+        self._overload_gave_up: set[str] = set()
+        self._rebooting: dict[str, float] = {}  # motor name -> when its reboot was sent
+        self._reboot_grace_until = 0.0
 
         self.motor_control_mode = self._infer_control_mode()
         self._torque_enabled = self.motor_control_mode != MotorControlMode.Disabled
@@ -292,7 +328,10 @@ class RobotBackend(Backend):
 
                 assert self.last_alive is not None
 
-                if self.last_alive + 1 < time.time():
+                if (
+                    self.last_alive + 1 < time.time()
+                    and time.time() > self._reboot_grace_until
+                ):
                     self.error = (
                         "No response from the robot's motor for the last second."
                     )
@@ -332,6 +371,7 @@ class RobotBackend(Backend):
                         self.logger.error(
                             f"Motor '{motor_name}' hardware errors: {errors}"
                         )
+                self._recover_overloads(hardware_errors)
                 self.last_hardware_error_check_time = time.time()
 
     def close(self) -> None:
@@ -736,6 +776,88 @@ class RobotBackend(Backend):
                 )
 
         return errors
+
+    def _recover_overloads(self, hardware_errors: dict[str, list[str]]) -> None:
+        """Reboot an OVERLOAD_RECOVER_MOTORS motor stuck in Overload, then give it its torque back.
+
+        Called with each hardware error check; a reboot takes a few checks to finish.
+        """
+        now = time.time()
+        for name in self.OVERLOAD_RECOVER_MOTORS:
+            motor_id = self.name2id.get(name)
+            if motor_id is None:
+                continue
+            if name in self._rebooting:
+                self._finish_motor_reboot(name, motor_id, now)
+                continue
+            if "Overload Error" not in hardware_errors.get(name, []):
+                self._overload_since.pop(name, None)
+                continue
+            since = self._overload_since.setdefault(name, now)
+            if now - since < self.OVERLOAD_RECOVER_AFTER_S:
+                continue
+            recent = [t for t in self._overload_reboots.get(name, []) if now - t < 3600]
+            self._overload_reboots[name] = recent
+            if len(recent) >= self.OVERLOAD_RECOVER_MAX_PER_HOUR:
+                if name not in self._overload_gave_up:
+                    self._overload_gave_up.add(name)
+                    self.logger.error(
+                        f"Motor '{name}' is in Overload again after {len(recent)} reboots this hour: "
+                        "leaving its torque off, check what blocks it"
+                    )
+                continue
+            self._overload_gave_up.discard(name)
+            self.logger.warning(
+                f"Motor '{name}' has been in Overload for {now - since:.0f} s: rebooting it"
+            )
+            self._reboot_grace_until = now + self.MOTOR_REBOOT_GRACE_S
+            try:
+                self.write_raw_packet(dynamixel_reboot_packet(motor_id))
+            except RuntimeError as e:
+                self.logger.warning(f"Could not reboot motor '{name}': {e}")
+                continue
+            recent.append(now)
+            self._overload_since.pop(name, None)
+            self._rebooting[name] = now
+
+    def _finish_motor_reboot(self, name: str, motor_id: int, now: float) -> None:
+        """Once the rebooted motor answers, restore its gains and, if the motors are on, its torque."""
+        assert self.c is not None, "Motor controller not initialized or already closed."
+        torque = self._torque_enabled and not self._partial_torque_override
+        try:
+            # https://emanual.robotis.com/docs/en/dxl/x/xl330-m288/#hardware-error-status
+            err_byte = self.c.async_read_raw_bytes(motor_id, 70, 1)
+            # An Input Voltage bit alone is ignored, as in read_hardware_errors.
+            still_in_error = bool(err_byte) and (err_byte[0] & ~0x01) != 0
+            if not still_in_error:
+                pid = self._motor_pids.get(name)
+                if pid is not None:
+                    self.c.async_write_pid_gains(motor_id, *pid)
+                if torque:
+                    self.c.enable_torque_on_ids([motor_id])
+        except RuntimeError:
+            # Still booting, or a bus hiccup: try again at the next check.
+            if now - self._rebooting[name] > self.MOTOR_REBOOT_GRACE_S:
+                del self._rebooting[name]
+                self.logger.error(
+                    f"Motor '{name}' did not answer {self.MOTOR_REBOOT_GRACE_S:.0f} s after its reboot"
+                )
+            return
+        took = now - self._rebooting.pop(name)
+        if still_in_error:
+            self.logger.warning(
+                f"Motor '{name}' rebooted but still reports error byte {err_byte[0]:#04x}"
+            )
+            return
+        if torque:
+            self.logger.info(
+                f"Motor '{name}' recovered from Overload (back within {took:.0f} s), torque on"
+            )
+        else:
+            self.logger.info(
+                f"Motor '{name}' recovered from Overload (back within {took:.0f} s), torque left off "
+                "as the motors are off"
+            )
 
     def write_raw_packet(self, packet: bytes) -> bytes:
         """Write a raw packet to the motor controller and return the response.
